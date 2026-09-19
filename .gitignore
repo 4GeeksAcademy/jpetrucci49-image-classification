@@ -4,3 +4,4 @@ __pycache__
 .venv
 data/processed/*.npy
 data/processed/*.npz
+data/interim/dataset_dogs_vs_cats/
