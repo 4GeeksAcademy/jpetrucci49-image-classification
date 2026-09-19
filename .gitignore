@@ -1,3 +1,6 @@
 __pycache__
 .env
 .learn
+.venv
+data/processed/*.npy
+data/processed/*.npz
