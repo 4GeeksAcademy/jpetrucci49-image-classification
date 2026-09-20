@@ -7,9 +7,9 @@ from shutil import copyfile
 
 import numpy as np
 from tensorflow.keras.applications import EfficientNetB0
-from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 from tensorflow.keras.layers import Dense, GlobalAveragePooling2D
-from tensorflow.keras.models import Sequential
+from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.utils import img_to_array, load_img
 
@@ -173,59 +173,100 @@ def compile_model(model: Sequential) -> Sequential:
     return model
 
 
+def make_callbacks(model_path: Path = MODEL_PATH) -> list:
+    """ModelCheckpoint + EarlyStopping for fit (replaces deprecated fit_generator)."""
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint = ModelCheckpoint(
+        filepath=str(model_path),
+        monitor="val_accuracy",
+        save_best_only=True,
+        save_weights_only=False,
+        mode="auto",
+        verbose=1,
+    )
+    early = EarlyStopping(
+        monitor="val_accuracy",
+        patience=2,
+        restore_best_weights=True,
+        verbose=1,
+    )
+    return [checkpoint, early]
+
+
 def train_model(
     model: Sequential,
     traindata,
     testdata,
     epochs: int = EPOCHS,
 ) -> object:
-    callbacks = [
-        EarlyStopping(monitor="val_accuracy", patience=2, restore_best_weights=True),
-    ]
     return model.fit(
         traindata,
         validation_data=testdata,
         epochs=epochs,
-        callbacks=callbacks,
+        callbacks=make_callbacks(),
     )
 
 
-def evaluate_model(model: Sequential, testdata) -> tuple[float, float]:
+def evaluate_model(model, testdata) -> tuple[float, float]:
     loss, accuracy = model.evaluate(testdata, verbose=1)
     return float(loss), float(accuracy)
 
 
-def save_model(model: Sequential, model_path: Path = MODEL_PATH) -> Path:
+def save_model(model, model_path: Path = MODEL_PATH) -> Path:
     model_path.parent.mkdir(parents=True, exist_ok=True)
     model.save(model_path)
     return model_path
 
 
-def main() -> None:
-    dataset_home = organize_dataset()
-    print(f"Organized class folders under {dataset_home}")
+def load_best_model(model_path: Path = MODEL_PATH):
+    """Reload the checkpointed best model from the models folder."""
+    return load_model(model_path)
 
-    trdata, traindata, tsdata, testdata = create_data_generators(
+
+def predict_test_set(model, testdata) -> tuple[np.ndarray, np.ndarray, float]:
+    """Predict class probabilities on the test generator (no image display)."""
+    probabilities = model.predict(testdata)
+    y_pred = probabilities.argmax(axis=1)
+    y_true = np.array(testdata.classes)
+    accuracy = float((y_pred == y_true).mean())
+    return probabilities, y_pred, accuracy
+
+
+def prepare_generators():
+    organize_dataset()
+    return create_data_generators(
         image_size=MODEL_IMAGE_SIZE,
         batch_size=BATCH_SIZE,
         class_mode="categorical",
         rescale=None,
     )
+
+
+def main() -> None:
+    trdata, traindata, tsdata, testdata = prepare_generators()
     print(f"trdata: {type(trdata).__name__}")
     print(f"tsdata: {type(tsdata).__name__}")
     print(f"traindata: {traindata.samples} images, classes={traindata.class_indices}")
     print(f"testdata: {testdata.samples} images, classes={testdata.class_indices}")
 
-    model = compile_model(build_model())
-    model.summary()
-    history = train_model(model, traindata, testdata)
-    loss, accuracy = evaluate_model(model, testdata)
+    if MODEL_PATH.exists():
+        print(f"Found saved model at {MODEL_PATH}; skipping retraining")
+    else:
+        model = compile_model(build_model())
+        model.summary()
+        history = train_model(model, traindata, testdata)
+        print(f"best val_accuracy: {max(history.history['val_accuracy']):.4f}")
+        save_model(model)
+
+    best_model = load_best_model()
+    loss, accuracy = evaluate_model(best_model, testdata)
+    _, y_pred, predict_accuracy = predict_test_set(best_model, testdata)
     print(f"test loss: {loss:.4f}")
     print(f"test accuracy: {accuracy:.4f}")
-    print(f"best val_accuracy: {max(history.history['val_accuracy']):.4f}")
-
-    saved_path = save_model(model)
-    print(f"Saved model to {saved_path}")
+    print(f"predict accuracy: {predict_accuracy:.4f}")
+    print(f"predicted cats: {int((y_pred == 0).sum())}")
+    print(f"predicted dogs: {int((y_pred == 1).sum())}")
+    print(f"Best model stored at {MODEL_PATH}")
 
 
 if __name__ == "__main__":
